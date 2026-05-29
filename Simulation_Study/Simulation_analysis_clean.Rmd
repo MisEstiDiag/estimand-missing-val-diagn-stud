@@ -1,0 +1,1184 @@
+---
+title: "Additional File 1. Joint Framework of the Estimand Concept and Missing Values in Diagnostic Studies - Analysis of simulated data"
+author: 
+ - Katharina Stahlmann
+ - Alexander Fierenz
+ - Mahnaz Badpa
+ - Antonia Zapf
+ - University Medical Center Hamburg-Eppendorf<br>  Institute of Medical Biometry and Epidemiology
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    depth: 6
+    fig_caption: no
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  word_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+# set global chunk options
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                     fig.width = 12,
+                      fig.asp = 0.8 ,
+                       out.width = "120%")
+
+# this options for word export
+#knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+ #                     fig.width = 12,
+ #                     fig.asp = 0.8 ,
+   #                    out.width = "120%")
+
+options(stringsAsFactors = F)
+# always show NA is there is any in the table function
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+
+options(scipen=999)
+
+```
+
+# Settings
+
+```{r packages, include=FALSE}
+library(ggplot2)
+library(writexl)
+library(ggpubr)
+library(RColorBrewer)
+library(dplyr)
+library(tidyr)
+library(rsimsum)
+library(gt)
+library(gtsummary)
+library(lme4)
+```
+
+```{r load functions, include=FALSE}
+
+source("Functions_jf.R")
+#display.brewer.all(n=3, type="qual", select=NULL, exact.n=TRUE, colorblindFriendly=TRUE)
+colors <- brewer.pal(3, "Dark2")
+simulation_parameter <- c("N", "p", "se", "sp", "r_cov", "r_ie_cov", "r_ie_ind", "p_ie1", "eff_ie1", "pr_ind",   "p_ie2", "eff_ie2", "pm", "mech")
+
+```
+
+```{r tab_fig_numbers}
+# for counting number of tables / figures automatically
+tabno <- 0
+figno <- 0
+```
+
+# Load data
+
+```{r load_data, include=FALSE}
+
+# load all simulated data
+data_names <- "res_1000"
+rdata_files <- list.files("./Simulation_results/Round2", pattern = data_names)
+rdata_files <- rdata_files[!rdata_files %in% c("res_1000_0.1_MCAR_v1.RData", "res_1000_0.1_MCAR_v2.RData", "res_1000_part1_v1.RData")]
+
+data_list <- list()
+for (i in 1:length(rdata_files)) {
+  load(file = paste0("./Simulation_results/Round2/", rdata_files[i]))
+  data_list[[i]] <- res
+}
+# combine the distinct data files
+res_all <- do.call(rbind, data_list)
+
+# quick check whether simulation worked
+summary(res_all)
+distinct_scen <- res_all %>%
+  distinct(pick(all_of(simulation_parameter))) %>% # >all 768 scenarios were simulated
+  mutate(
+    scenario = row_number()
+  )
+
+# merge with scenario number and label variables
+res_all <- res_all %>%
+  full_join(distinct_scen, by = simulation_parameter) %>%
+  mutate(
+    id_var = row_number(),
+    sens.ci.length.e1 = sens.ciu.e1-sens.cil.e1,
+    spec.ci.length.e1 = spec.ciu.e1-spec.cil.e1,
+    sens.ci.length.e2 = sens.ciu.e2-sens.cil.e2,
+    spec.ci.length.e2 = spec.ciu.e2-spec.cil.e2,
+    sens.ci.length.e3 = sens.ciu.e3-sens.cil.e3,
+    spec.ci.length.e3 = spec.ciu.e3-spec.cil.e3,
+  ) %>%
+  sjlabelled::var_labels(
+    mice_meth = "Problems in mice",
+    mice_out = "Variable removed from imputation model due to problems",
+    scenario = "Scenario Number",
+    sim = "Iteration within Scenario",
+    N = "Sample size",
+    p = "Prevalence of the target condition",
+    se = "Input sensitivity",
+    sp = "Input specificity",
+    r_cov = "Correlation between index test and covariates, and among covariates", 
+    r_ie_cov = "Correlation between interfering events and covariates", 
+    r_ie_ind = "Correlation of index test with interfering event 1 and interfering event 2, respectively", 
+    p_ie1 = "Prevalence of interfering event 1", 
+    eff_ie1 = "Difference in the prevalence of IE1 between subjects with and without the target condition", 
+    pr_ind = "Probability that the index test is not affected by IE1", 
+    p_ie2 = "Prevalence of IE2", 
+    eff_ie2 = "Difference in the prevalence of IE2 between subjects with and without the target condition", 
+    pm = "Proportion of missing values", 
+    mech = "Missingness Mechanism",
+    sens.ci.length.e1 = "Sensitivity CI length for estimand 1",
+    spec.ci.length.e1 = "Specificity CI length for estimand 1",
+    sens.ci.length.e2 = "Sensitivity CI length for estimand 2",
+    spec.ci.length.e2 = "Specificity CI length for estimand 2",
+    sens.ci.length.e3 = "Sensitivity CI length for estimand 3",
+    spec.ci.length.e3 = "Specificity CI length for estimand 3",
+  ) %>%
+  arrange(scenario, sim) %>%
+  dplyr::select(-scen_id, -iteration) # remove scen_id as it it the same for each part and not unique per scenario; use scenario instead, remove iteration as it is the same across the six parts
+
+
+```
+
+```{r estimate_performance, include=FALSE}
+# include estimation of performance parameter here
+source("Performance_parameter.R")
+
+```
+
+
+
+
+# Overview of Simulation parameters
+
+```{r overview}
+
+tabno <- tabno+1
+nsim <- max(res_all$sim)
+Abbreviation <- names(res_all[,simulation_parameter])
+
+setup <- data.frame(
+  Abbreviation = c("nsim", Abbreviation),
+  Parameter = c("Number of Iterations", sapply(res_all[,simulation_parameter], function(col) attr(col, "label"))),
+  Values = c(
+    nsim,
+    sapply(Abbreviation, function(x) (paste(unique(res_all[,x]), collapse = ',')))
+  )
+)  
+setup %>%
+  gt() %>% 
+  tab_style(style = cell_text(weight = "bold"), locations = cells_column_labels(columns=c("Abbreviation", "Parameter", "Values"))) %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". Overview of simulation parameters")
+  )
+
+```
+
+<br>
+
+Table `r tabno <- tabno+1` `r tabno`. Overview of estimands
+
+
+| Estimand    |                                                                                 |
+|:------------|:--------------------------------------------------------------------------------|
+| Naive approach  | Diagnostic policy strategy for IE1 and principal stratum for IE2 <br> (subset of subjects for which the index test was present) and <br> complete case analysis for missing values |
+| Worst case | Setback strategy for IE1 and IE2 and intention-to-diagnose for missing values |
+| Advanced approach | Diagnostic policy strategy for non-informative IE1, principal stratum for informative IE1 <br> hypothetical strategy for non-informative IE2, indicative event strategy for informative IE2 <br> and multiple imputation for missing values |
+
+
+# Analysis of simulation results
+## General description of performance
+
+```{r descr_performance}
+tabno <- tabno+1
+
+# overview of misisng se/sp results and problems in mice
+sens_var <- grep("sens.", names(res_all), value=TRUE)
+spec_var <- grep("spec.", names(res_all), value=TRUE)
+
+tab <- res_all %>%
+  dplyr::select(any_of(c("N", "p", sens_var, spec_var, "data_pm", "dis_pm", "ndis_pm", "mice_meth", "mice_out"))) %>%
+  mutate(
+    p = paste0("Prevalence of the target condition = ", p)
+  ) %>%
+  gtsummary::tbl_strata(strata=N, .tbl_fun =  ~ .x %>% 
+                          tbl_summary(
+                            by=p,
+                            type = list(all_continuous() ~ "continuous2",
+                                       all_dichotomous() ~ "categorical"),
+                            statistic = list(all_continuous() ~ c("{N_nonmiss}",
+                                                    "{min}, {max}"),
+                                              all_categorical() ~ "{n} / {N} ({p}%)"),
+                            missing = "ifany",
+                            missing_text = "Missing",
+                            digits = list(all_continuous() ~ c(0, 2, 2, 2),
+                                      all_categorical() ~ c(0,0,1))
+                            ),
+                        .header = "**N = {strata}**"
+  ) %>%
+  as_gt() %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". General overview")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+tab
+
+
+```
+
+## Boxplot of analytical sensitivity / specificity
+
+These analytical sensitivity and specificity values were used for calculating the main relative and absoulte bias results. 
+
+```{r boxplot_analyt_sens}
+
+figno <- figno+1
+plot_sens <- ggplot(res_long, aes(x = Estimand, y = esti_sens)) +
+                          geom_boxplot(fill = colors[1]) +
+                          stat_summary(fun=mean, geom="point", size=2, color=colors[2]) +
+                          xlab("Estimand") + ylab("Analytical Sensitivity") +
+                          facet_grid(eff_ie1 ~ eff_ie2, labeller = label_both) +
+                          ggtitle(paste0("Figure ", figno, ". Distribution of the Analytical Sensitivity by IE1 and IE2")) +
+                          labs(caption = "The red point gives the mean of the sensitivity values") +
+                          theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                axis.title = element_text(size = 18),
+                                axis.text = element_text(size = 16),
+                                plot.title = element_text(size = 20),
+                                strip.text.x = element_text(size = 14),
+                                strip.text.y = element_text(size = 14),
+                                plot.caption = element_text(hjust = 0))
+plot_sens
+```
+
+```{r boxplot_analyt_spec}
+
+figno <- figno+1
+plot_spec <- ggplot(res_long, aes(x = Estimand, y = esti_spec)) +
+                          geom_boxplot(fill = colors[1]) +
+                          stat_summary(fun=mean, geom="point", size=2, color=colors[2]) +
+                          xlab("Estimand") + ylab("Analytical Specificity") +
+                          facet_grid(eff_ie1 ~ eff_ie2, labeller = label_both) +
+                          ggtitle(paste0("Figure ", figno, ". Distribution of the Analytical Specificity by IE1 and IE2")) +
+                          labs(caption = "The red point gives the mean of the specificity values") +
+                          theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                axis.title = element_text(size = 18),
+                                axis.text = element_text(size = 16),
+                                plot.title = element_text(size = 20),
+                                strip.text.x = element_text(size = 14),
+                                strip.text.y = element_text(size = 14),
+                                plot.caption = element_text(hjust = 0))
+plot_spec
+```
+
+## Metamodels
+
+Linear regression models were performed separately to quantify the relative effect of the simulation factors and methods on the performance outcome. This approach is based on the paper of van Smeden et al. (2019).
+
+Linear regression models were conducted for each estimand separately and stratified by missingness mechanism. The other simulation parameters and their pairwise interactions were included as categorical covariates in the regression models. To gain some insight into the most relevant predictors, backward selection was performed. Relative bias and coverage probability for sensitivity and specificity were examined as outcome variables in separate models.
+
+### Relative bias as outcome
+
+```{r metamodels1, include=FALSE}
+
+# select the simulation parameters used as predictors for the metamodels
+sim_param <- simulation_parameter[!simulation_parameter %in% c("r_ie_cov", "r_ie_ind", "p_ie1", "pr_ind", "p_ie2", "mech")]
+#sim_param <- case_when(sim_param=="N" ~ "I(N/100)", 
+#                       TRUE ~ sim_param)
+
+# separate metamodels for each missingness mechanism and each estimand
+# relative bias of sensitivity
+results <- list()
+counter <- 1
+for (i in c("Estimand 1", "Estimand 2", "Estimand 3")) {
+  for (j in c("MCAR", "MAR", "MNAR")) {
+    
+      results[[counter]] <- mm1(data=res_perform, performance = "sens_est_rbias",  mechanism=j, estimand=i)
+      counter <- counter+1
+ }
+}
+
+results_sens <- do.call(rbind, results)
+
+results <- list()
+counter <- 1
+for (i in c("Estimand 1", "Estimand 2", "Estimand 3")) {
+  for (j in c("MCAR", "MAR", "MNAR")) {
+    
+      results[[counter]] <- mm1(data=res_perform, performance = "spec_est_rbias",  mechanism=j, estimand=i)
+      counter <- counter+1
+ }
+}
+
+results_spec <- do.call(rbind, results)
+
+
+```
+
+```{r metamodels1_sens}
+tabno <- tabno+1
+
+results_sens %>%
+  gt(groupname_col = c("Mechanism", "r2"), rowname_col = "Estimand") %>%
+  cols_label(
+    term = " ",
+    estimate = "Estimate",
+    conf.low = "95% lower CI",
+    conf.high = "95% upper CI"
+  ) %>%
+  tab_header(
+    title = paste0("Table ", tabno,  ". The effect of the simulation parameters (as factors) on relative bias of sensitivity (as absolute probability) for each estimand")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+
+```
+
+```{r metamodels1_spec}
+tabno <- tabno+1
+
+results_spec %>%
+  gt(groupname_col = c("Mechanism", "r2"), rowname_col = "Estimand") %>%
+  cols_label(
+    term = " ",
+    estimate = "Estimate",
+    conf.low = "95% lower CI",
+    conf.high = "95% upper CI"
+  ) %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". The effect of the simulation parameters on relative bias of specificity (as absolute probability) for each estimand")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+
+rm(results, results_sens, results_spec)
+```
+
+### Coverage probability as outcome
+
+```{r metamodels1_cov, include=FALSE}
+
+# select the simulation parameters used as predictors for the metamodels
+sim_param <- simulation_parameter[!simulation_parameter %in% c("r_ie_cov", "r_ie_ind", "p_ie1", "pr_ind", "p_ie2", "mech")]
+#sim_param <- case_when(sim_param=="N" ~ "I(N/100)", 
+#                       TRUE ~ sim_param)
+
+# separate metamodels for each missingness mechanism and each estimand
+# relative bias of sensitivity
+results <- list()
+counter <- 1
+for (i in c("Estimand 1", "Estimand 2", "Estimand 3")) {
+  for (j in c("MCAR", "MAR", "MNAR")) {
+    
+      results[[counter]] <- mm1(data=res_perform, performance = "sens_cov",  mechanism=j, estimand=i)
+      counter <- counter+1
+ }
+}
+
+results_sens <- do.call(rbind, results)
+
+results <- list()
+counter <- 1
+for (i in c("Estimand 1", "Estimand 2", "Estimand 3")) {
+  for (j in c("MCAR", "MAR", "MNAR")) {
+    
+      results[[counter]] <- mm1(data=res_perform, performance = "spec_cov",  mechanism=j, estimand=i)
+      counter <- counter+1
+ }
+}
+
+results_spec <- do.call(rbind, results)
+
+
+```
+
+```{r metamodels1_cov_sens}
+tabno <- tabno+1
+
+results_sens %>%
+  gt(groupname_col = c("Mechanism", "r2"), rowname_col = "Estimand") %>%
+  cols_label(
+    term = " ",
+    estimate = "Estimate",
+    conf.low = "95% lower CI",
+    conf.high = "95% upper CI"
+  ) %>%
+  tab_header(
+    title = paste0("Table ", tabno,  ". The effect of the simulation parameters (as factors) on coverage probability (as percentage points) of sensitivity for each estimand")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+
+```
+
+```{r metamodels1_cov_spec}
+tabno <- tabno+1
+
+results_spec %>%
+  gt(groupname_col = c("Mechanism", "r2"), rowname_col = "Estimand") %>%
+  cols_label(
+    term = " ",
+    estimate = "Estimate",
+    conf.low = "95% lower CI",
+    conf.high = "95% upper CI"
+  ) %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". The effect of the simulation parameters on coverage probability (as percentage points) of specificity (in absolute terms) for each estimand")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+
+rm(results, results_sens, results_spec)
+```
+
+
+## Nested loop plots by missingness mechanism 
+
+(restricted to scenarios with a correlation between index test and covariates = 0.7)
+
+```{r nlp_rbias}
+
+nested_loop_plots <- list()
+for (i in c("sens", "spec")) {
+  for (j in c("MCAR", "MAR", "MNAR")){
+    
+    figno <- figno+1
+    
+    nlp <- simsum(res_long[which(res_long$mech==j & res_long$r_cov==0.7),], estvarname = i, true = paste0("esti_", i), methodvar = "Estimand",
+                    ref = "Estimand 1", by = c("eff_ie1", "eff_ie2", "sp", "p", "se", "N", "pm"), 
+                    df = NULL, dropbig = FALSE, x = FALSE, control = list())
+    nested_loop_plots[[paste0(i,"_", j)]] <- autoplot(nlp, type = "nlp", stats = "rbias") + 
+      scale_color_manual(values = colors) +
+      ggtitle(paste0("Figure ", figno, ". Nested loop plot for relative bias under misingness mechanism ", j)) +
+      #geom_line(linewidth=2) +
+      theme(axis.title = element_text(size = 18),
+            axis.text = element_text(size = 16),
+            plot.title = element_text(size = 20),
+            #strip.text.x = element_text(size = 14),
+            #strip.text.y = element_text(size = 14),
+            plot.caption = element_text(hjust = 0),
+            legend.title = element_text(size=16),
+            legend.text = element_text(size=14))
+    
+  }
+}
+
+```
+
+
+### Relative bias for sensitivity
+
+```{r nlp_sens_MCAR}
+nested_loop_plots[["sens_MCAR"]]
+```
+
+```{r nlp_sens_MAR}
+nested_loop_plots[["sens_MAR"]]
+```
+
+```{r nlp_sens_MNAR}
+nested_loop_plots[["sens_MNAR"]]
+```
+
+
+### Relative bias for specificity
+
+```{r nlp_spec_MCAR}
+nested_loop_plots[["spec_MCAR"]]
+```
+
+```{r nlp_spec_MAR}
+nested_loop_plots[["spec_MAR"]]
+```
+
+```{r nlp_spec_MNAR}
+nested_loop_plots[["spec_MNAR"]]
+```
+
+
+```{r figure2and4_manuscript}
+
+fig2 <- nested_loop_plots[["sens_MAR"]] +
+  theme_classic() +
+  labs(title=NULL,
+       y = "Relative Bias") +
+  scale_color_manual(
+    values = colors,
+    labels = c("Naive estimand", "Worst case estimand", "Advanced estimand")
+  ) +
+  theme(axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        strip.text.x = element_text(size = 9),
+        strip.text.y = element_text(size = 9),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 12))
+
+#ggsave(file = "../../04-results/01-plots/Figure2.png", fig2, width=13, height=9)
+ggsave(file = "../../04-results/01-plots/Figure2.pdf", fig2, width=13, height=9)
+
+fig4 <- nested_loop_plots[["spec_MAR"]] +
+  theme_classic() +
+  labs(title=NULL,
+       y = "Relative Bias") +
+  scale_color_manual(
+    values = colors,
+    labels = c("Naive estimand", "Worst case estimand", "Advanced estimand")
+  ) +
+  theme(axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        strip.text.x = element_text(size = 9),
+        strip.text.y = element_text(size = 9),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 12))
+
+#ggsave(file = "../../04-results/01-plots/Figure4.png", fig4, width=13, height=9)
+ggsave(file = "../../04-results/01-plots/Figure4.pdf", fig4, width=13, height=9)
+  
+```
+
+
+
+### Absolute bias for sensitivity
+
+```{r nlp_absbias}
+
+nested_loop_plots3 <- list()
+for (i in c("sens", "spec")) {
+  for (j in c("MCAR", "MAR", "MNAR")){
+    
+    figno <- figno+1
+    
+    nlp <- simsum(res_long[which(res_long$mech==j & res_long$r_cov==0.7),], estvarname = i, true = paste0("esti_", i), methodvar = "Estimand",
+                    ref = "Estimand 1", by = c("eff_ie1", "eff_ie2", "sp", "p", "se", "N", "pm"), 
+                    df = NULL, dropbig = FALSE, x = FALSE, control = list())
+    nested_loop_plots3[[paste0(i,"_", j)]] <- autoplot(nlp, type = "nlp", stats = "bias") + 
+      scale_color_manual(values = colors) +
+      ggtitle(paste0("Figure ", figno, ". Nested loop plot for absolute bias under misingness mechanism ", j)) +
+      #geom_line(linewidth=2) +
+      theme(axis.title = element_text(size = 18),
+            axis.text = element_text(size = 16),
+            plot.title = element_text(size = 20),
+            #strip.text.x = element_text(size = 14),
+            #strip.text.y = element_text(size = 14),
+            plot.caption = element_text(hjust = 0),
+            legend.title = element_text(size=16),
+            legend.text = element_text(size=14))
+    
+  }
+}
+
+```
+
+
+```{r nlp_sens_MCAR_abias}
+nested_loop_plots3[["sens_MCAR"]]
+```
+
+```{r nlp_sens_MAR_abias}
+nested_loop_plots3[["sens_MAR"]]
+```
+
+```{r nlp_sens_MNAR_abias}
+nested_loop_plots3[["sens_MNAR"]]
+```
+
+
+### Absolute bias for specificity
+
+```{r nlp_spec_MCAR_abias}
+nested_loop_plots3[["spec_MCAR"]]
+```
+
+```{r nlp_spec_MAR_abias}
+nested_loop_plots3[["spec_MAR"]]
+```
+
+```{r nlp_spec_MNAR_abias}
+nested_loop_plots3[["spec_MNAR"]]
+```
+
+### Mean squared error for sensitivity
+
+```{r nlp2}
+
+nested_loop_plots2 <- list()
+for (i in c("sens", "spec")) {
+  for (j in c("MCAR", "MAR", "MNAR")){
+    
+    figno <- figno+1
+    
+    nlp <- simsum(res_long[which(res_long$mech==j & res_long$r_cov==0.7),], estvarname = i, true = paste0("esti_", i), methodvar = "Estimand",
+                    ref = "Estimand 1", by = c("eff_ie1", "eff_ie2", "sp", "p", "se", "N", "pm"), 
+                    df = NULL, dropbig = FALSE, x = FALSE, control = list())
+    nested_loop_plots2[[paste0(i,"_", j)]] <- autoplot(nlp, type = "nlp", stats = "mse") + 
+      scale_color_manual(values = colors) +
+      ggtitle(paste0("Figure ", figno, ". Nested loop plot for Mean squared error under misingness mechanism ", j)) +
+      theme(axis.title = element_text(size = 18),
+            axis.text = element_text(size = 16),
+            plot.title = element_text(size = 20),
+            plot.caption = element_text(hjust = 0),
+            legend.title = element_text(size=16),
+            legend.text = element_text(size=14))
+    
+  }
+}
+
+```
+
+```{r nlp2_sens_MCAR}
+nested_loop_plots2[["sens_MCAR"]]
+```
+
+```{r nlp2_sens_MAR}
+nested_loop_plots2[["sens_MAR"]]
+```
+
+```{r nlp2_sens_MNAR}
+nested_loop_plots2[["sens_MNAR"]]
+```
+
+
+### Mean squared error for specificity 
+
+```{r nlp2_spec_MCAR}
+nested_loop_plots2[["spec_MCAR"]]
+```
+
+```{r nlp2_spec_MAR}
+nested_loop_plots2[["spec_MAR"]]
+```
+
+```{r nlp2_spec_MNAR}
+nested_loop_plots2[["spec_MNAR"]]
+```
+
+
+## Nested loop plots by missingness mechanism based on the input se/sp 
+
+(restricted to scenarios with a correlation between index test and covariates = 0.7)
+
+```{r nlp_input}
+
+nested_loop_plots3 <- list()
+for (i in c("sens", "spec")) {
+  for (j in c("MCAR", "MAR", "MNAR")){
+    
+    figno <- figno+1
+    
+    nlp <- simsum(res_long[which(res_long$mech==j & res_long$r_cov==0.7),], estvarname = i, true = substr(i, 1,2), methodvar = "Estimand",
+                    ref = "Estimand 1", by = c("eff_ie1", "eff_ie2", "sp", "p", "se", "N", "pm"), 
+                    df = NULL, dropbig = FALSE, x = FALSE, control = list())
+    nested_loop_plots3[[paste0(i,"_", j)]] <- autoplot(nlp, type = "nlp", stats = "rbias") + 
+      scale_color_manual(values = colors) +
+      ggtitle(paste0("Figure ", figno, ". Nested loop plot for relative bias under misingness mechanism ", j)) +
+      #geom_line(linewidth=2) +
+      theme(axis.title = element_text(size = 18),
+            axis.text = element_text(size = 16),
+            plot.title = element_text(size = 20),
+            #strip.text.x = element_text(size = 14),
+            #strip.text.y = element_text(size = 14),
+            plot.caption = element_text(hjust = 0),
+            legend.title = element_text(size=16),
+            legend.text = element_text(size=14))
+    
+  }
+}
+
+```
+
+
+### Relative bias for sensitivity
+
+```{r nlp_input_sens_MCAR}
+nested_loop_plots3[["sens_MCAR"]]
+```
+
+```{r nlp_input_sens_MAR}
+nested_loop_plots3[["sens_MAR"]]
+```
+
+```{r nlp_input_sens_MNAR}
+nested_loop_plots3[["sens_MNAR"]]
+```
+
+
+### Relative bias for specificity
+
+```{r nlp_input_spec_MCAR}
+nested_loop_plots3[["spec_MCAR"]]
+```
+
+```{r nlp_input_spec_MAR}
+nested_loop_plots3[["spec_MAR"]]
+```
+
+```{r nlp_input_spec_MNAR}
+nested_loop_plots3[["spec_MNAR"]]
+```
+
+```{r reshapredata}
+# prepare data for further plots
+
+res_plot <- res_perform %>%
+  mutate(
+    sens_rbias_abs = abs(sens_est_rbias),
+    spec_rbias_abs = abs(spec_est_rbias),
+    sens_rbias_cat = factor(case_when(sens_est_rbias<0 ~ "negative",
+                                      sens_est_rbias==0 ~ "null",
+                                      sens_est_rbias>0 ~ "positive"),
+                            levels = c("negative", "null", "positive")),
+    spec_rbias_cat = factor(case_when(spec_est_rbias<0 ~ "negative",
+                                      spec_est_rbias==0 ~ "null",
+                                      spec_est_rbias>0 ~ "positive"),
+                            levels = c("negative", "null", "positive")),
+    IE_cat = factor(case_when(eff_ie1==0 & eff_ie2==0 ~ "IE1 & IE2 non-informative",
+                              eff_ie1!=0 & eff_ie2==0 ~ "IE1 informative, IE2 non-informative",
+                              eff_ie1==0 & eff_ie2!=0 ~ "IE1 non-informative, IE2 informative",
+                              eff_ie1!=0 & eff_ie2!=0 ~ "IE1 & IE2 informative")),
+    sens_cov_cil = sens_cov-1.96*sens_mcse_cov,
+    sens_cov_ciu = sens_cov+1.96*sens_mcse_cov,
+    spec_cov_cil = spec_cov-1.96*spec_mcse_cov,
+    spec_cov_ciu = spec_cov+1.96*spec_mcse_cov
+  )
+```
+
+
+## Coverage probability 
+
+```{r coverage1a}
+
+#devtools::install_github("haleyjeppson/ggmosaic")
+#library(ggmosaic)
+idx1 <- which(res_perform$mech == "MCAR"  & res_perform$N == 100  & res_perform$r_cov==0.7) 
+idx2 <- which(res_perform$mech == "MCAR"  & res_perform$N == 500  & res_perform$r_cov==0.7) 
+idx3 <- which(res_perform$mech == "MAR"  & res_perform$N == 100 & res_perform$r_cov==0.7) 
+idx4 <- which(res_perform$mech == "MAR"  & res_perform$N == 500 & res_perform$r_cov==0.7) 
+idx5 <- which(res_perform$mech == "MNAR"  & res_perform$N == 100 & res_perform$r_cov==0.7) 
+idx6 <- which(res_perform$mech == "MNAR"  & res_perform$N == 500 & res_perform$r_cov==0.7) 
+
+idxlist <- list(idx1, idx2, idx3, idx4, idx5, idx6)
+
+
+title <- c("Coverage probability for sensitivity for MCAR, and N=100", 
+           "Coverage probability for sensitivity for MCAR, and N=500",
+           "Coverage probability for sensitivity for MAR and N=100", 
+           "Coverage probability for sensitivity for MAR and N=500",
+           "Coverage probability for sensitivity for MNAR and N=100", 
+           "Coverage probability for sensitivity for MNAR and N=500")
+
+
+#3D plot
+mybreaks <- c(0, 0.25, 0.5, 0.75, 1)
+plotlist1a <- list()
+for (i in 1:length(idxlist)) {
+  
+  figno <- figno+1
+  
+  plotlist1a[[i]] <- ggplot(res_plot[idxlist[[i]],], aes((as.factor(Estimand)), IE_cat, fill = sens_cov)) +
+    geom_tile() +
+    scale_fill_gradientn(
+        colours = hcl.colors(length(mybreaks) - 1, "YlOrRd", rev = FALSE), #color="Grays" for black and white
+        breaks = mybreaks,
+        limits = c(0,1)) +
+    xlab("Estimand") + ylab("IE1 and IE2") +
+    facet_grid(se + sp ~ p + pm, labeller = label_context) +
+    ggtitle(paste0("Figure ", figno, ". ", title[i])) +
+    labs(fill="Coverage Probability") + 
+    theme(axis.title = element_text(size = 18),
+          axis.text = element_text(size = 16),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+                              plot.title = element_text(size = 20),
+                              strip.text.x = element_text(size = 14),
+                              strip.text.y = element_text(size = 14),
+                              plot.caption = element_text(hjust = 0))
+}
+
+```
+
+```{r plotcov1a}
+plotlist1a
+```
+
+```{r figure3_manuscript}
+
+fig3.1 <- plotlist1a[[3]] +
+  labs(title=NULL, y=NULL) +
+  scale_x_discrete(labels = c("Naive", "Worst case", "Advanced")) 
+  
+fig3.2 <- plotlist1a[[4]] +
+  labs(title=NULL, y=NULL) +
+  scale_x_discrete(labels = c("Naive", "Worst case", "Advanced"))
+
+fig3 <- ggarrange(fig3.1, fig3.2, labels=c("A","B"), nrow=2, 
+                  font.label = list(size = 14, color = "black", face = "bold", family = NULL),
+                  common.legend=TRUE, legend="right")
+
+#ggsave(file = "../../04-results/01-plots/Figure3.png", fig3, width=15, height=17)
+ggsave(file = "../../04-results/01-plots/Figure3.pdf", fig3, width=15, height=17)
+
+
+```
+
+
+```{r coverage1b}
+
+title <- c("Coverage probability for specificity for MCAR, and N=100", 
+           "Coverage probability for specificity for MCAR, and N=500",
+           "Coverage probability for specificity for MAR and N=100", 
+           "Coverage probability for specificity for MAR and N=500",
+           "Coverage probability for specificity for MNAR and N=100", 
+           "Coverage probability for specificity for MNAR and N=500")
+
+#3D plot
+mybreaks <- c(0, 0.25, 0.5, 0.75, 1)
+plotlist1b <- list()
+for (i in 1:length(idxlist)) {
+  
+  figno <- figno+1
+  
+  plotlist1b[[i]] <- ggplot(res_plot[idxlist[[i]],], aes(Estimand, IE_cat, fill = spec_cov)) +
+    geom_tile() +
+    scale_fill_gradientn(
+        colours = hcl.colors(length(mybreaks) - 1, "YlOrRd", rev = FALSE), #color="Grays" for black and white
+        breaks = mybreaks,
+        limits = c(0,1)) +
+    xlab("Estimand") + ylab("IE1 and IE2") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    facet_grid(se + sp ~ p + pm, labeller = label_context) +
+    ggtitle(paste0("Figure ", figno, ". ", title[i])) +
+    labs(fill="Coverage Probability") + 
+    theme(axis.title = element_text(size = 18),
+                              axis.text = element_text(size = 16),
+                              plot.title = element_text(size = 20),
+                              strip.text.x = element_text(size = 14),
+                              strip.text.y = element_text(size = 14),
+                              plot.caption = element_text(hjust = 0))
+}
+```
+
+```{r plotcov1b}
+plotlist1b
+```
+
+```{r figure5_manuscript}
+
+fig5.1 <- plotlist1b[[3]] +
+  labs(title=NULL, y=NULL) +
+  scale_x_discrete(labels = c("Naive", "Worst case", "Advanced")) 
+  
+fig5.2 <- plotlist1b[[4]] +
+  labs(title=NULL, y=NULL) +
+  scale_x_discrete(labels = c("Naive", "Worst case", "Advanced"))
+
+fig5 <- ggarrange(fig5.1, fig5.2, labels=c("A","B"), nrow=2, 
+                  font.label = list(size = 14, color = "black", face = "bold", family = NULL),
+                  common.legend=TRUE, legend="right")
+
+#ggsave(file = "../../04-results/01-plots/Figure5.png", fig5, width=15, height=17)
+ggsave(file = "../../04-results/01-plots/Figure5.pdf", fig5, width=15, height=17)
+
+
+```
+
+
+```{r coverage2_sens}
+
+idx1 <- which(res_plot$mech == "MCAR"  & res_plot$N == 100  & 
+                res_plot$r_cov==0.7 & res_plot$se==0.8 & res_plot$sp==0.9) 
+idx2 <- which(res_plot$mech == "MCAR"  & res_plot$N == 500  & 
+                res_plot$r_cov==0.7 & res_plot$se==0.8 & res_plot$sp==0.9) 
+idx3 <- which(res_plot$mech == "MAR"  & res_plot$N == 100 & 
+                res_plot$r_cov==0.7 & res_plot$se==0.8 & res_plot$sp==0.9) 
+idx4 <- which(res_plot$mech == "MAR"  & res_plot$N == 500 & 
+                res_plot$r_cov==0.7 & res_plot$se==0.8 & res_plot$sp==0.9) 
+idx5 <- which(res_plot$mech == "MNAR"  & res_plot$N == 100 & 
+                res_plot$r_cov==0.7& res_plot$se==0.8 & res_plot$sp==0.9) 
+idx6 <- which(res_plot$mech == "MNAR"  & res_plot$N == 500 & 
+                res_plot$r_cov==0.7 & res_plot$se==0.8 & res_plot$sp==0.9) 
+
+idxlist <- list(idx1, idx2, idx3, idx4, idx5, idx6)
+
+
+title <- c("Coverage probability for sensitivity for MCAR, and N=100", 
+           "Coverage probability for sensitivity for MCAR, and N=500",
+           "Coverage probability for sensitivity for MAR and N=100", 
+           "Coverage probability for sensitivity for MAR and N=500",
+           "Coverage probability for sensitivity for MNAR and N=100", 
+           "Coverage probability for sensitivity for MNAR and N=500")
+
+plotlist3 <- list()
+for (i in 1:length(idxlist)) {
+  
+  figno <- figno+1
+  
+  plotlist3[[i]] <- ggplot(res_plot[idxlist[[i]],], aes(y=Estimand, x=sens_cov)) +
+                      geom_segment( aes(y=Estimand, yend=Estimand, x=0.95, xend=sens_cov)) +
+                      geom_point(size=2) +
+                      geom_vline(xintercept=0.95) +
+                      geom_text(aes(sens_cov_ciu, Estimand, label = ")")) +
+                      geom_text(aes(sens_cov_cil, Estimand, label = "(")) +
+                      facet_grid(IE_cat ~ p + pm , labeller = label_context) + # pm~p
+                      scale_color_grey() +
+                      ggtitle(paste0("Figure ", figno, ". ", title[i])) +
+                      theme(axis.title = element_text(size = 18),
+                              axis.text = element_text(size = 16),
+                              plot.title = element_text(size = 20),
+                              strip.text.x = element_text(size = 14),
+                              strip.text.y = element_text(size = 12),
+                              legend.position = "bottom")
+}
+
+```
+
+```{r}
+plotlist3
+```
+
+```{r coverage2_spec}
+title <- c("Coverage probability for specificity for MCAR, and N=100", 
+           "Coverage probability for specificity for MCAR, and N=500",
+           "Coverage probability for specificity for MAR and N=100", 
+           "Coverage probability for specificity for MAR and N=500",
+           "Coverage probability for specificity for MNAR and N=100", 
+           "Coverage probability for specificity for MNAR and N=500")
+
+plotlist4 <- list()
+for (i in 1:length(idxlist)) {
+  
+  figno <- figno+1
+  
+  plotlist4[[i]] <- ggplot(res_plot[idxlist[[i]],], aes(y=Estimand, x=spec_cov)) +
+                      geom_segment( aes(y=Estimand, yend=Estimand, x=0.95, xend=spec_cov)) +
+                      geom_point(size=2) +
+                      geom_vline(xintercept=0.95) +
+                      geom_text(aes(spec_cov_ciu, Estimand, label = ")")) +
+                      geom_text(aes(spec_cov_cil, Estimand, label = "(")) +
+                      facet_grid(IE_cat ~ p + pm , labeller = label_context) + # pm~p
+                      scale_color_grey() +
+                      ggtitle(paste0("Figure ", figno, ". ", title[i])) +
+                      theme(axis.title = element_text(size = 18),
+                              axis.text = element_text(size = 16),
+                              plot.title = element_text(size = 20),
+                              strip.text.x = element_text(size = 14),
+                              strip.text.y = element_text(size = 12),
+                              legend.position = "bottom")
+}
+
+```
+
+```{r coverage2_spec_plots}
+plotlist4
+```
+
+
+## Mean sensitivity by scenario
+
+The following plots show the distribution of the estimated sensitivity estimators across all iterations by scenario. The black point shows the "true" sensitivity value, the red point the mean of all estimators.
+
+```{r violin_sens}
+
+idx1 <- which(res_long$mech == "MCAR" & res_long$N == 100 & res_long$r_cov==0.7 & res_long$se == 0.8 & res_long$sp == 0.9) 
+idx2 <- which(res_long$mech == "MCAR" & res_long$r_cov==0.7 & res_long$N == 500 & res_long$se == 0.8 & res_long$sp == 0.9) 
+idx3 <- which(res_long$mech == "MAR" & res_long$r_cov==0.7 & res_long$N == 100 & res_long$se == 0.8 & res_long$sp == 0.9) 
+idx4 <- which(res_long$mech == "MAR" & res_long$r_cov==0.7 & res_long$N == 500 & res_long$se == 0.8 & res_long$sp == 0.9) 
+idx5 <- which(res_long$mech == "MNAR" & res_long$r_cov==0.7 & res_long$N == 100 & res_long$se == 0.8 & res_long$sp == 0.9) 
+idx6 <- which(res_long$mech == "MNAR" & res_long$r_cov==0.7 & res_long$N == 500 & res_long$se == 0.8 & res_long$sp == 0.9) 
+
+idxlist <- list(idx1, idx2, idx3, idx4, idx5, idx6)
+
+title <- c("Sensitivity for MCAR, and N=100, r_cov=0.7, se=0.8 and sp=0.9", 
+           "Sensitivity for MCAR, and N=500, r_cov=0.7, se=0.8 and sp=0.9",
+           "Sensitivity for MAR and N=100, r_cov=0.7, se=0.8 and sp=0.9", 
+           "Sensitivity for MAR and N=500, r_cov=0.7, se=0.8 and sp=0.9",
+           "Sensitivity for MNAR and N=100, r_cov=0.7, se=0.8 and sp=0.9", 
+           "Sensitivity for MNAR and N=500, r_cov=0.7, se=0.8 and sp=0.9")
+
+plotlist <- list()
+for (i in 1:length(idxlist)) {
+  plotlist[[i]] <- ggplot(res_long[idxlist[[i]],], aes(x = Estimand, y = sens)) +
+                          geom_violin(fill = colors[1], trim=FALSE) +
+                          stat_summary(fun=mean, geom="point", size=2, color=colors[2]) +
+                          geom_point(aes(x=Estimand, y=esti_sens)) +
+                          xlab("Estimand") + ylab("Sensitivity") +
+                          facet_grid(eff_ie1 + eff_ie2 ~ p + pm, labeller = label_context) +
+                          ggtitle(title[i]) +
+                          theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                axis.title = element_text(size = 18),
+                                axis.text = element_text(size = 16),
+                                plot.title = element_text(size = 20),
+                                strip.text.x = element_text(size = 14),
+                                strip.text.y = element_text(size = 14),
+                                plot.caption = element_text(hjust = 0))
+}
+
+plotlist
+```
+
+## Mean specificity by scenario
+
+```{r violin_spec}
+
+title <- c("Specificity for MCAR, and N=100, r_cov=0.7, se=0.8 and sp=0.9", 
+           "Specificity for MCAR, and N=500, r_cov=0.7, se=0.8 and sp=0.9",
+           "Specificity for MAR and N=100, r_cov=0.7, se=0.8 and sp=0.9", 
+           "Specificity for MAR and N=500, r_cov=0.7, se=0.8 and sp=0.9",
+           "Specificity for MNAR and N=100, r_cov=0.7, se=0.8 and sp=0.9", 
+           "Specificity for MNAR and N=500, r_cov=0.7, se=0.8 and sp=0.9")
+
+plotlist <- list()
+for (i in 1:length(idxlist)) {
+  plotlist[[i]] <- ggplot(res_long[idxlist[[i]],], aes(x = Estimand, y = spec)) +
+                          geom_violin(fill = colors[1], trim=FALSE) +
+                          stat_summary(fun=mean, geom="point", size=2, color=colors[2]) +
+                          geom_point(aes(x=Estimand, y=esti_sens)) +
+                          xlab("Estimand") + ylab("Specificity") +
+                          facet_grid(eff_ie1 + eff_ie2 ~ p + pm, labeller = label_context) +
+                          ggtitle(title[i]) +
+                          theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                axis.title = element_text(size = 18),
+                                axis.text = element_text(size = 16),
+                                plot.title = element_text(size = 20),
+                                strip.text.x = element_text(size = 14),
+                                strip.text.y = element_text(size = 14),
+                                plot.caption = element_text(hjust = 0))
+}
+
+plotlist
+```
+
+
+
+## Confidence interval lengths
+
+```{r ci_lengths}
+
+tab_ci <- res_perform %>%
+  dplyr::select(all_of(c("scenario", sim_param, "Estimand", "sens_ci_length_mean", "spec_ci_length_mean"))) %>%
+  pivot_wider(names_from = "Estimand", values_from = c("sens_ci_length_mean", "spec_ci_length_mean")) %>%
+  sjlabelled::var_labels(
+    `sens_ci_length_mean_Estimand 1` =  "CI length for sensitivity for Estimand 1",
+    `sens_ci_length_mean_Estimand 2` =  "CI length for sensitivity for Estimand 2",
+    `sens_ci_length_mean_Estimand 3` =  "CI length for sensitivity for Estimand 3",
+    `spec_ci_length_mean_Estimand 1` =  "CI length for specificity for Estimand 1",
+    `spec_ci_length_mean_Estimand 2` =  "CI length for specificity for Estimand 2",
+    `spec_ci_length_mean_Estimand 3` =  "CI length for specificity for Estimand 3"
+  )
+
+tabno <- tabno+1
+
+tab_ci %>% 
+  dplyr::select(N, p, `sens_ci_length_mean_Estimand 1`, `sens_ci_length_mean_Estimand 2`, `sens_ci_length_mean_Estimand 3`,
+                `spec_ci_length_mean_Estimand 1`, `spec_ci_length_mean_Estimand 2`, `spec_ci_length_mean_Estimand 3`) %>%
+  gtsummary::tbl_strata(strata=N, .tbl_fun =  ~ .x %>% 
+                          tbl_summary(
+                            by=p,
+                            type = list(all_continuous() ~ "continuous2",
+                                       all_dichotomous() ~ "categorical"),
+                            statistic = list(all_continuous() ~ c("{mean}",
+                                                                  "{min}, {max}"),
+                                              all_categorical() ~ "{n} / {N} ({p}%)"),
+                            missing = "ifany",
+                            missing_text = "Missing",
+                            digits = list(all_continuous() ~ 2)
+                            ) %>%
+                          modify_header(all_stat_cols() ~ "**p = {level}**, N = {n}"),
+                        .header = "**N = {strata}**"
+  ) %>%
+  as_gt() %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". Mean CI lengths across all scenarios by sample size (N) and prevalence (p)")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+
+rm(tab_ci)
+```
+
+### Selected scenarios
+Fixed simulation parameter: N=100, pm=0.1, p=0.1, r_cov=0.7, se=0.8, sp=0.9
+
+```{r ci_lengths_scenarios}
+
+tab_ci <- res_long %>%
+  dplyr::select(all_of(c("scenario", "id_var", sim_param, "mech", "Estimand", "sens.ci.length", "spec.ci.length"))) %>%
+  pivot_wider( names_from = "Estimand", values_from = c("sens.ci.length", "spec.ci.length")) %>%
+  sjlabelled::var_labels(
+    `sens.ci.length_Estimand 1` =  "CI length for sensitivity for Estimand 1",
+    `sens.ci.length_Estimand 2` =  "CI length for sensitivity for Estimand 2",
+    `sens.ci.length_Estimand 3` =  "CI length for sensitivity for Estimand 3",
+    `spec.ci.length_Estimand 1` =  "CI length for specificity for Estimand 1",
+    `spec.ci.length_Estimand 2` =  "CI length for specificity for Estimand 2",
+    `spec.ci.length_Estimand 3` =  "CI length for specificity for Estimand 3"
+  )
+
+tabno <- tabno+1
+
+tab <- tab_ci %>% 
+  filter(N==100, pm==0.1, p==0.1, r_cov==0.7, se==0.8, sp==0.9) %>%
+  dplyr::select(eff_ie1, eff_ie2, `sens.ci.length_Estimand 1`, `sens.ci.length_Estimand 2`,
+                `sens.ci.length_Estimand 3`,`spec.ci.length_Estimand 1`, 
+                `spec.ci.length_Estimand 2`, `spec.ci.length_Estimand 3`) %>%
+  gtsummary::tbl_strata(strata=eff_ie1, .tbl_fun =  ~ .x %>% 
+                          tbl_summary(
+                            by=eff_ie2,
+                            type = list(all_continuous() ~ "continuous2",
+                                       all_dichotomous() ~ "categorical"),
+                            statistic = list(all_continuous() ~ c("{mean}",
+                                                                  "{min}, {max}"),
+                                              all_categorical() ~ "{n} / {N} ({p}%)"),
+                            missing = "ifany",
+                            missing_text = "Missing",
+                            digits = list(all_continuous() ~ 2)
+                            ) %>%
+                          modify_header(all_stat_cols() ~ "**Eff_IE2 = {level}**, N = {n}"),
+                        .header = "**Eff_IE1 = {strata}**"
+  ) %>%
+  as_gt() %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". Mean CI lengths across all iterations per scenario by IE type")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)
+tab
+```
+
+
+## Monte Carlo Standard Errors
+
+```{r mcse}
+tabno <- tabno+1
+
+tab_mcse <- res_perform %>%
+  dplyr::select(Estimand, contains("mcse")) %>%
+  tbl_summary(
+    by=Estimand,
+    type = list(all_continuous() ~ "continuous2",
+                all_dichotomous() ~ "categorical"),
+    statistic = list(all_continuous() ~ c("{mean}",
+                                          "{min}, {max}"),
+                     all_categorical() ~ "{n} / {N} ({p}%)"),
+    missing = "ifany",
+    missing_text = "Missing",
+    digits = list(all_continuous() ~ 3)
+  ) %>%
+  as_gt() %>%
+  tab_header(
+    title = paste0("Table ", tabno, ". Mean MCSE across all scenarios")
+  ) %>%
+  opt_stylize(style=1, color="gray", add_row_striping = FALSE)                         
+tab_mcse
+
+rm(tab_mcse)
+```
+
+# References
+
+van Smeden, M., Moons, K. G., de Groot, J. A., Collins, G. S., Altman, D. G., Eijkemans, M. J., & Reitsma, J. B. (2019). Sample size for binary logistic prediction models: Beyond events per variable criteria. Stat Methods Med Res, 28(8), 2455-2474. https://doi.org/10.1177/0962280218784726 
+
+# Session Info
+
+```{r}
+
+sessionInfo()
+
+```
+
