@@ -1,0 +1,5 @@
+This folder provides the simulation script (main_simulation_hummel2_master.R), the simulated data, the analysis script of the simulated data (Simulation_analysis_clean.Rmd) 
+and additional programs with functions and calculation of performance parameters. 
+As the simulation took too much time to execute it in one run (even on a high performance cluster), we divided the scenarios in 6 sets and did execute them separately. 
+Therefore, we obtained six files with simulated data which were combined into one dataset in the analysis script.
+The R-file Functions_jf.R provides user-written functions required for simulating and analysing the data. 
